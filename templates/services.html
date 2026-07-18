@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Services — Voice AI Agent{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <h1>Welcome, {{ session.get('account_username') }} 👋</h1>
+  <p class="subtitle">Here's everything our voice agent can help you with. Just start talking — it figures out what you need.</p>
+</header>
+
+<section class="card start-conversation-card">
+  <h2>🎙️ Ready to talk?</h2>
+  <p>Press start, allow microphone access, and say hello. The agent will ask how it can help and take it from there — no menus, no forms.</p>
+  <a href="{{ url_for('agent_page') }}" class="btn-primary btn-large">Start Live Conversation →</a>
+</section>
+
+<section class="domains-overview">
+  {% for key, domain in domains.items() %}
+  <div class="card domain-service-card domain-border-{{ key }}">
+    <h3>{{ domain.company_name }}</h3>
+    <p class="domain-service-label">{{ domain.label }}</p>
+    <ul class="services-list">
+      {% for svc in domain.services %}
+      <li>{{ svc }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

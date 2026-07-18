@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{{ domain.label }} — Voice AI Agent{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <h1>{{ domain.company_name }}</h1>
+  <p class="subtitle">{{ domain.label }} — All conversations for this domain</p>
+</header>
+
+<section class="card">
+  <h2>Services Offered</h2>
+  <ul class="services-list">
+    {% for svc in domain.services %}
+    <li>{{ svc }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <div class="card-header-row">
+    <h2>Conversations — {{ domain.label }}</h2>
+    <button class="btn-danger-small" onclick="clearDomain()">Delete All in This Domain</button>
+  </div>
+  <table>
+    <thead>
+      <tr><th>User</th><th>Status</th><th>Messages</th><th>Started</th><th>Ended</th><th></th></tr>
+    </thead>
+    <tbody id="domain-calls-table">
+      {% for call in calls %}
+      <tr id="call-row-{{ call.id }}">
+        <td>{{ call.account_username or '—' }}</td>
+        <td><span class="status status-{{ call.status }}">{{ call.status }}</span></td>
+        <td>{{ call.message_count }}</td>
+        <td>{{ call.created_at[:19] }}</td>
+        <td>{{ call.ended_at[:19] if call.ended_at else '—' }}</td>
+        <td class="actions-cell">
+          <a href="{{ url_for('conversation', call_id=call.id) }}" class="btn-small">Conversation</a>
+          <button class="btn-small btn-danger" onclick="deleteCall({{ call.id }})">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No conversations for this domain yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<p class="back-link"><a href="{{ url_for('admin_dashboard') }}">&larr; Back to Admin Dashboard</a></p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const domainKey = "{{ domain_key }}";
+
+async function refreshCalls() {
+  try {
+    const res = await fetch(`/api/domain/${domainKey}/calls`);
+    const data = await res.json();
+    const tbody = document.getElementById('domain-calls-table');
+    tbody.innerHTML = data.calls.length ? data.calls.map(c => `
+      <tr id="call-row-${c.id}">
+        <td>${c.account_username || '—'}</td>
+        <td><span class="status status-${c.status}">${c.status}</span></td>
+        <td>${c.message_count}</td>
+        <td>${c.created_at.slice(0,19)}</td>
+        <td>${c.ended_at ? c.ended_at.slice(0,19) : '—'}</td>
+        <td class="actions-cell">
+          <a href="/admin/conversation/${c.id}" class="btn-small">Conversation</a>
+          <button class="btn-small btn-danger" onclick="deleteCall(${c.id})">Delete</button>
+        </td>
+      </tr>
+    `).join('') : '<tr><td colspan="6" class="empty">No conversations yet.</td></tr>';
+  } catch (e) { console.error(e); }
+}
+setInterval(refreshCalls, 5000);
+
+async function deleteCall(callId) {
+  if (!confirm('Delete this conversation and its full transcript? This cannot be undone.')) return;
+  const res = await fetch(`/api/call/${callId}`, { method: 'DELETE' });
+  if (res.ok) {
+    const row = document.getElementById(`call-row-${callId}`);
+    if (row) row.remove();
+  } else {
+    alert('Could not delete this conversation.');
+  }
+}
+
+async function clearDomain() {
+  if (!confirm(`Delete ALL conversations for ${domainKey}? This cannot be undone.`)) return;
+  const res = await fetch(`/api/calls/clear?domain_key=${domainKey}`, { method: 'DELETE' });
+  if (res.ok) {
+    refreshCalls();
+  } else {
+    alert('Could not clear history.');
+  }
+}
+</script>
+{% endblock %}

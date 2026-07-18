@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Voice AI Agent{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  {% if session.get('admin_logged_in') %}
+  <nav class="topnav">
+    <a href="{{ url_for('admin_dashboard') }}" class="nav-brand">Voice AI Agent · Admin</a>
+    <div class="nav-links">
+      <a href="{{ url_for('admin_dashboard') }}">All Conversations</a>
+      <a href="{{ url_for('domain_dashboard', domain_key='it_services') }}">IT Services</a>
+      <a href="{{ url_for('domain_dashboard', domain_key='restaurant') }}">Restaurant</a>
+      <a href="{{ url_for('domain_dashboard', domain_key='petrol_pump') }}">Petrol Pump</a>
+      <a href="{{ url_for('admin_logout') }}" class="nav-logout">Admin Logout</a>
+    </div>
+  </nav>
+  {% elif session.get('account_id') %}
+  <nav class="topnav">
+    <a href="{{ url_for('services') }}" class="nav-brand">Voice AI Agent</a>
+    <div class="nav-links">
+      <span class="nav-welcome">Hi, {{ session.get('account_username') }}</span>
+      <a href="{{ url_for('services') }}">Services</a>
+      <a href="{{ url_for('logout') }}" class="nav-logout">Logout</a>
+    </div>
+  </nav>
+  {% endif %}
+
+  <main class="{% block main_class %}{% endblock %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="banner {{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <p>Multi-Domain LLM Voice Agent &middot; Groq (free) &middot; Browser mic/speaker, no telephony cost</p>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

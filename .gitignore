@@ -1,0 +1,17 @@
+# Secrets - never commit these
+.env
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Database / logs
+*.db
+logs/*.log
+
+# OS
+.DS_Store

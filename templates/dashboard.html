@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard — Voice AI Agent{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <h1>Admin Dashboard</h1>
+  <p class="subtitle">View and manage every conversation across all business domains</p>
+</header>
+
+{% if warnings %}
+<div class="banner warning">
+  <strong>Setup notes:</strong>
+  <ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<section class="stats-grid">
+  {% for key, label in domains.items() %}
+  <a href="{{ url_for('domain_dashboard', domain_key=key) }}" class="stat-card stat-{{ key }}">
+    <h3>{{ label }}</h3>
+    {% set stat = stats | selectattr('domain_key', 'equalto', key) | first %}
+    <p class="stat-number">{{ stat.total_calls if stat else 0 }}</p>
+    <p class="stat-label">Total Conversations</p>
+  </a>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <div class="card-header-row">
+    <h2>Recent Conversations (All Domains)</h2>
+    <button class="btn-danger-small" onclick="clearAll()">Delete All History</button>
+  </div>
+  <table>
+    <thead>
+      <tr><th>User</th><th>Domain</th><th>Status</th><th>Messages</th><th>Time</th><th></th></tr>
+    </thead>
+    <tbody id="calls-table">
+      {% for call in calls %}
+      <tr id="call-row-{{ call.id }}">
+        <td>{{ call.account_username or '—' }}</td>
+        <td>
+          {% if call.domain_key %}
+          <span class="domain-badge domain-{{ call.domain_key }}">{{ call.domain_label }}</span>
+          {% else %}
+          <span class="domain-badge domain-pending">Not yet determined</span>
+          {% endif %}
+        </td>
+        <td><span class="status status-{{ call.status }}">{{ call.status }}</span></td>
+        <td>{{ call.message_count }}</td>
+        <td>{{ call.created_at[:19] }}</td>
+        <td class="actions-cell">
+          <a href="{{ url_for('conversation', call_id=call.id) }}" class="btn-small">Conversation</a>
+          <button class="btn-small btn-danger" onclick="deleteCall({{ call.id }})">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No conversations yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Registered Users</h2>
+  <table>
+    <thead>
+      <tr><th>Username</th><th>Signed Up</th><th>Total Sessions</th><th>Last Session</th></tr>
+    </thead>
+    <tbody id="accounts-table">
+      {% for account in accounts %}
+      <tr>
+        <td>{{ account.username }}</td>
+        <td>{{ account.created_at[:19] }}</td>
+        <td>{{ account.session_count }}</td>
+        <td>{{ account.last_session_at[:19] if account.last_session_at else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No registered users yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function refreshStats() {
+  try {
+    const res = await fetch('/api/stats');
+    const data = await res.json();
+
+    const accountsBody = document.getElementById('accounts-table');
+    accountsBody.innerHTML = data.accounts.length ? data.accounts.map(a => `
+      <tr>
+        <td>${a.username}</td>
+        <td>${a.created_at.slice(0,19)}</td>
+        <td>${a.session_count}</td>
+        <td>${a.last_session_at ? a.last_session_at.slice(0,19) : '—'}</td>
+      </tr>
+    `).join('') : '<tr><td colspan="4" class="empty">No registered users yet.</td></tr>';
+
+    const callsBody = document.getElementById('calls-table');
+    callsBody.innerHTML = data.calls.length ? data.calls.map(c => `
+      <tr id="call-row-${c.id}">
+        <td>${c.account_username || '—'}</td>
+        <td>${c.domain_key
+            ? `<span class="domain-badge domain-${c.domain_key}">${c.domain_label}</span>`
+            : `<span class="domain-badge domain-pending">Not yet determined</span>`}</td>
+        <td><span class="status status-${c.status}">${c.status}</span></td>
+        <td>${c.message_count}</td>
+        <td>${c.created_at.slice(0,19)}</td>
+        <td class="actions-cell">
+          <a href="/admin/conversation/${c.id}" class="btn-small">Conversation</a>
+          <button class="btn-small btn-danger" onclick="deleteCall(${c.id})">Delete</button>
+        </td>
+      </tr>
+    `).join('') : '<tr><td colspan="6" class="empty">No conversations yet.</td></tr>';
+  } catch (e) { console.error(e); }
+}
+setInterval(refreshStats, 5000);
+
+async function deleteCall(callId) {
+  if (!confirm('Delete this conversation and its full transcript? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/call/${callId}`, { method: 'DELETE' });
+    if (res.ok) {
+      const row = document.getElementById(`call-row-${callId}`);
+      if (row) row.remove();
+    } else {
+      alert('Could not delete this conversation.');
+    }
+  } catch (e) {
+    alert('Network error while deleting.');
+  }
+}
+
+async function clearAll() {
+  if (!confirm('Delete ALL conversations and history across every domain? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/calls/clear', { method: 'DELETE' });
+    if (res.ok) {
+      refreshStats();
+    } else {
+      alert('Could not clear history.');
+    }
+  } catch (e) {
+    alert('Network error while clearing history.');
+  }
+}
+</script>
+{% endblock %}

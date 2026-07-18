@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Conversation #{{ call.id }} — Voice AI Agent{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <h1>Conversation Transcript</h1>
+  <p class="subtitle">
+    {{ domain.company_name if domain else 'Domain not yet determined' }}
+    &middot; {{ call.account_username or '—' }}
+    &middot; {{ call.created_at[:19] }}
+  </p>
+</header>
+
+<section class="card conversation-meta">
+  <div class="meta-grid">
+    <div><strong>Domain:</strong>
+      {% if call.domain_key %}
+      <span class="domain-badge domain-{{ call.domain_key }}">{{ call.domain_label }}</span>
+      {% else %}
+      <span class="domain-badge domain-pending">Not yet determined</span>
+      {% endif %}
+    </div>
+    <div><strong>Status:</strong> <span class="status status-{{ call.status }}">{{ call.status }}</span></div>
+    <div><strong>Messages:</strong> {{ call.message_count }}</div>
+    <div><button class="btn-danger-small" onclick="deleteThisConversation()">Delete This Conversation</button></div>
+  </div>
+</section>
+
+<section class="card conversation-panel">
+  <h2>Full Conversation</h2>
+  <div class="chat-window" id="chat-window">
+    {% for msg in messages %}
+    <div class="chat-bubble chat-{{ msg.role }}">
+      {% if msg.role == 'system' %}
+      <div class="chat-text" style="text-align:center;font-style:italic;">↳ {{ msg.content }}</div>
+      {% else %}
+      <div class="chat-header">
+        <span class="chat-role">{{ 'Agent' if msg.role == 'agent' else 'Caller' }}</span>
+        {% if msg.source %}
+        <span class="chat-source source-{{ msg.source }}">{{ msg.source }}{% if msg.confidence %} ({{ msg.confidence }}%){% endif %}</span>
+        {% endif %}
+        <span class="chat-time">{{ msg.created_at[11:19] }}</span>
+      </div>
+      <div class="chat-text">{{ msg.content }}</div>
+      {% endif %}
+    </div>
+    {% else %}
+    <p class="empty">No messages recorded yet. The conversation will appear here during the call.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<p class="back-link">
+  {% if call.domain_key %}
+  <a href="{{ url_for('domain_dashboard', domain_key=call.domain_key) }}">&larr; Back to {{ call.domain_label }} Dashboard</a>
+  {% else %}
+  <a href="{{ url_for('admin_dashboard') }}">&larr; Back to Admin Dashboard</a>
+  {% endif %}
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const callId = {{ call.id }};
+
+function renderMessage(m) {
+  if (m.role === 'system') {
+    return `<div class="chat-bubble chat-system">
+      <div class="chat-text" style="text-align:center;font-style:italic;">↳ ${escapeHtml(m.content)}</div>
+    </div>`;
+  }
+  const sourceBadge = m.source 
+    ? `<span class="chat-source source-${escapeHtml(m.source)}">${escapeHtml(m.source)}${m.confidence ? ' (' + m.confidence + '%)' : ''}</span>` 
+    : '';
+  return `<div class="chat-bubble chat-${escapeHtml(m.role)}">
+    <div class="chat-header">
+      <span class="chat-role">${m.role === 'agent' ? 'Agent' : 'Caller'}</span>
+      ${sourceBadge}
+      <span class="chat-time">${m.created_at ? m.created_at.slice(11,19) : ''}</span>
+    </div>
+    <div class="chat-text">${escapeHtml(m.content)}</div>
+  </div>`;
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+async function refreshConversation() {
+  try {
+    const res = await fetch('/api/conversation/' + callId);
+    const data = await res.json();
+    const win = document.getElementById('chat-window');
+    if (data.messages && data.messages.length) {
+      win.innerHTML = data.messages.map(renderMessage).join('');
+    } else {
+      win.innerHTML = '<p class="empty">No messages yet.</p>';
+    }
+    win.scrollTop = win.scrollHeight;
+  } catch (e) { 
+    console.error('refresh error:', e); 
+  }
+}
+
+{% if call.status not in ['completed', 'failed', 'busy', 'no-answer', 'canceled'] %}
+setInterval(refreshConversation, 3000);
+{% endif %}
+
+async function deleteThisConversation() {
+  if (!confirm('Delete this entire conversation? This cannot be undone.')) return;
+  const res = await fetch('/api/call/' + callId, { method: 'DELETE' });
+  if (res.ok) {
+    window.location.href = "{{ url_for('admin_dashboard') }}";
+  } else {
+    alert('Could not delete this conversation.');
+  }
+}
+</script>
+{% endblock %}

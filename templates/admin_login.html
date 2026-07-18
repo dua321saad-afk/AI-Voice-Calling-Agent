@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Admin Login — Voice AI Agent{% endblock %}
+{% block main_class %}login-page{% endblock %}
+
+{% block content %}
+<div class="login-card">
+  <h1>Admin Login</h1>
+  <p class="subtitle">Staff access — view and manage all conversations</p>
+  <form method="POST">
+    <label for="username">Admin Username</label>
+    <input type="text" id="username" name="username" required autofocus>
+
+    <label for="password">Admin Password</label>
+    <input type="password" id="password" name="password" required>
+
+    <button type="submit">Sign In</button>
+  </form>
+  <p class="auth-switch"><a href="{{ url_for('login') }}">&larr; Back to user login</a></p>
+</div>
+{% endblock %}

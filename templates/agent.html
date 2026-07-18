@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+{% block title %}Live Agent — Voice AI Agent{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <h1>🎙️ Live Voice Agent</h1>
+  <p class="subtitle">Put the caller's phone on speaker near this laptop, then press Start.</p>
+</header>
+
+<div class="banner warning" id="browser-warning" style="display:none;">
+  Your browser doesn't support the Web Speech API needed for this. Please use
+  <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> on desktop.
+</div>
+
+<div class="banner error" id="mic-error" style="display:none;"></div>
+
+<section class="card agent-widget">
+
+  <div class="agent-setup" id="agent-setup">
+    <p class="setup-hint">Ready when you are — put the caller's phone on speaker near this laptop, then press Start.</p>
+    <button class="btn-primary btn-large" id="start-btn" onclick="startSession()">Start Session</button>
+    <a href="{{ url_for('services') }}" class="back-link-inline">&larr; Back to Services</a>
+  </div>
+
+  <div class="agent-live" id="agent-live" style="display:none;">
+
+    <div class="mic-only-stage">
+      <div class="mic-orb mic-orb-large" id="mic-orb">
+        <div class="mic-orb-pulse"></div>
+        <span id="mic-icon">🎙️</span>
+      </div>
+      <p class="status-label" id="status-label">Listening…</p>
+    </div>
+
+    <div class="agent-controls">
+      <button class="btn-danger-small" onclick="endSession()">End Session</button>
+    </div>
+
+    <p class="hint">
+      Just talk — no need to press anything. Speaking while the agent is
+      replying will interrupt it and it'll listen to you instead.
+    </p>
+  </div>
+
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let recognition = null;
+let currentCallId = null;
+let sessionActive = false;
+let processing = false;       // true while waiting on LLM / speaking
+let lastProcessedText = "";   // prevent duplicate processing
+let restartTimer = null;
+let synthWatchdog = null;
+let isSpeaking = false;       // track if agent is currently speaking
+
+const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (!SpeechRecognitionClass || !('speechSynthesis' in window)) {
+  document.getElementById('browser-warning').style.display = 'block';
+  document.getElementById('start-btn').disabled = true;
+}
+
+function showMicError(msg) {
+  const el = document.getElementById('mic-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+function setStatus(label, orbState) {
+  document.getElementById('status-label').textContent = label;
+  const orb = document.getElementById('mic-orb');
+  orb.className = 'mic-orb mic-orb-large ' + (orbState || '');
+}
+
+async function startSession() {
+  try {
+    const res = await fetch('/api/session/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    currentCallId = data.call_id;
+    sessionActive = true;
+    processing = false;
+    lastProcessedText = "";
+    isSpeaking = false;
+
+    document.getElementById('agent-setup').style.display = 'none';
+    document.getElementById('agent-live').style.display = 'block';
+
+    speak(data.greeting, () => {
+      processing = false;
+      startListeningLoop();
+    });
+  } catch (e) {
+    alert('Could not start session. Check the server is running.');
+    console.error(e);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Speech recognition with ANTI-LOOP protection
+// ---------------------------------------------------------------------
+
+function startListeningLoop() {
+  if (!SpeechRecognitionClass || !sessionActive) return;
+  if (processing || isSpeaking) return;  // Don't listen while processing/speaking
+  setStatus('Listening…', 'orb-listening');
+  runRecognitionCycle();
+}
+
+function runRecognitionCycle() {
+  if (!sessionActive) return;
+  if (processing || isSpeaking) return;  // CRITICAL: prevent loops
+
+  recognition = new SpeechRecognitionClass();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+  recognition.maxAlternatives = 1;
+
+  let finalTranscript = "";
+  let hasFinalResult = false;
+
+  recognition.onresult = (event) => {
+    const last = event.results[event.results.length - 1];
+    const transcript = last[0].transcript.trim();
+
+    // Barge-in: caller speaks while agent is talking
+    if (isSpeaking && transcript.split(/\s+/).length >= 2) {
+      console.log('[agent] barge-in detected:', transcript);
+      window.speechSynthesis.cancel();
+      isSpeaking = false;
+      processing = false;
+      setStatus('Listening…', 'orb-listening');
+    }
+
+    if (last.isFinal && transcript && !hasFinalResult) {
+      hasFinalResult = true;
+      finalTranscript = transcript;
+      console.log('[agent] final result:', transcript);
+
+      // Prevent duplicate processing (same text within 3 seconds)
+      if (transcript === lastProcessedText) {
+        console.log('[agent] duplicate text, ignoring');
+        return;
+      }
+
+      handleCallerSpeech(transcript);
+    }
+  };
+
+  recognition.onerror = (event) => {
+    console.warn('[agent] recognition error:', event.error);
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      showMicError('Microphone access was blocked. Please allow microphone permission and refresh.');
+      sessionActive = false;
+      return;
+    }
+    // 'no-speech' and 'aborted' are normal - let onend restart
+  };
+
+  recognition.onend = () => {
+    if (!sessionActive) return;
+    // Only restart if we're not processing and not speaking
+    if (!processing && !isSpeaking) {
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(runRecognitionCycle, 200);
+    }
+  };
+
+  try {
+    recognition.start();
+  } catch (e) {
+    console.error('Could not start recognition:', e);
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(runRecognitionCycle, 500);
+  }
+}
+
+async function handleCallerSpeech(transcript) {
+  if (!sessionActive || !currentCallId || processing) return;
+
+  // Anti-loop: don't process same text again
+  if (transcript === lastProcessedText) {
+    console.log('[agent] skipping duplicate:', transcript);
+    return;
+  }
+
+  processing = true;
+  lastProcessedText = transcript;
+  console.log('[agent] processing:', transcript);
+  setStatus('Thinking…', 'orb-thinking');
+
+  try {
+    const res = await fetch(`/api/session/${currentCallId}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: transcript }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      console.error('[agent] server error', res.status, errBody);
+      showMicError(`Server error (${res.status}): ${errBody.error || 'unknown'}`);
+      processing = false;
+      startListeningLoop();
+      return;
+    }
+
+    const data = await res.json();
+    console.log('[agent] reply:', data);
+
+    if (!data.text) {
+      console.error('[agent] response had no text field:', data);
+      processing = false;
+      startListeningLoop();
+      return;
+    }
+
+    if (data.is_goodbye) {
+      speak(data.text, () => {
+        processing = false;
+        finishSession();
+      });
+    } else {
+      speak(data.text, () => {
+        processing = false;
+        // Small pause before listening again
+        setTimeout(() => startListeningLoop(), 300);
+      });
+    }
+  } catch (e) {
+    console.error('[agent] fetch failed:', e);
+    showMicError('Could not reach the server. Check your connection.');
+    processing = false;
+    startListeningLoop();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Speech synthesis with Chrome bug workaround
+// ---------------------------------------------------------------------
+
+function speak(text, onDone) {
+  if (!text || !text.trim()) {
+    if (onDone) onDone();
+    return;
+  }
+
+  console.log('[agent] speaking:', text);
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.0;
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
+
+  isSpeaking = true;
+  setStatus('Speaking…', 'orb-speaking');
+
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    isSpeaking = false;
+    console.log('[agent] done speaking');
+    clearInterval(synthWatchdog);
+    if (onDone) onDone();
+  };
+
+  utterance.onstart = () => {
+    console.log('[agent] speech synthesis started');
+  };
+
+  utterance.onend = finish;
+
+  utterance.onerror = (e) => {
+    console.error('[agent] speech synthesis error:', e.error);
+    // Don't treat 'interrupted' (from barge-in) as a real error
+    if (e.error !== 'interrupted' && e.error !== 'canceled') {
+      showMicError('Speech synthesis error: ' + e.error);
+    }
+    finish();
+  };
+
+  // Chrome bug workaround: nudge synthesis engine every 4s
+  clearInterval(synthWatchdog);
+  synthWatchdog = setInterval(() => {
+    if (!window.speechSynthesis.speaking) {
+      clearInterval(synthWatchdog);
+      return;
+    }
+    window.speechSynthesis.pause();
+    window.speechSynthesis.resume();
+  }, 4000);
+
+  window.speechSynthesis.speak(utterance);
+
+  // Safety timeout: if speech takes way too long, force finish
+  setTimeout(() => {
+    if (!finished && !window.speechSynthesis.speaking) {
+      console.warn('[agent] speech synthesis safety timeout');
+      finish();
+    }
+  }, 30000);  // 30 second max
+}
+
+function finishSession() {
+  sessionActive = false;
+  processing = false;
+  isSpeaking = false;
+  lastProcessedText = "";
+  clearTimeout(restartTimer);
+  clearInterval(synthWatchdog);
+  if (recognition) {
+    try { recognition.stop(); } catch (e) {}
+    recognition = null;
+  }
+  setStatus('Session ended', 'orb-ended');
+  if (currentCallId) {
+    fetch(`/api/session/${currentCallId}/end`, { method: 'POST' }).catch(() => {});
+  }
+  setTimeout(() => {
+    document.getElementById('agent-setup').style.display = 'block';
+    document.getElementById('agent-live').style.display = 'none';
+    document.getElementById('mic-error').style.display = 'none';
+    currentCallId = null;
+  }, 2500);
+}
+
+function endSession() {
+  window.speechSynthesis.cancel();
+  finishSession();
+}
+</script>
+{% endblock %}
