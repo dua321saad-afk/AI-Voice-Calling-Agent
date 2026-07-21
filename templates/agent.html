@@ -55,6 +55,7 @@ let lastProcessedText = "";   // prevent duplicate processing
 let restartTimer = null;
 let synthWatchdog = null;
 let isSpeaking = false;       // track if agent is currently speaking
+let speechUnlocked = false;   // MOBILE FIX: track if speechSynthesis is unlocked
 
 const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -76,7 +77,34 @@ function setStatus(label, orbState) {
   orb.className = 'mic-orb mic-orb-large ' + (orbState || '');
 }
 
+// ---------------------------------------------------------------------
+// MOBILE FIX: Unlock speechSynthesis on every user interaction
+// ---------------------------------------------------------------------
+function unlockSpeech() {
+  if (speechUnlocked) return;
+  
+  // Try to speak an empty utterance to unlock speechSynthesis
+  const unlockUtterance = new SpeechSynthesisUtterance('');
+  unlockUtterance.volume = 0;
+  
+  try {
+    window.speechSynthesis.speak(unlockUtterance);
+    speechUnlocked = true;
+    console.log('[agent] speechSynthesis unlocked');
+  } catch (e) {
+    console.warn('[agent] speech unlock failed:', e);
+  }
+}
+
+// Attach to all user interactions
+['click', 'touchstart', 'touchmove', 'keydown'].forEach(event => {
+  document.addEventListener(event, unlockSpeech, { passive: true, once: false });
+});
+
 async function startSession() {
+  // MOBILE FIX: Ensure speech is unlocked on start button click
+  unlockSpeech();
+  
   try {
     const res = await fetch('/api/session/start', {
       method: 'POST',
@@ -89,6 +117,7 @@ async function startSession() {
     processing = false;
     lastProcessedText = "";
     isSpeaking = false;
+    speechUnlocked = false; // Reset, will unlock on interactions
 
     document.getElementById('agent-setup').style.display = 'none';
     document.getElementById('agent-live').style.display = 'block';
@@ -244,7 +273,7 @@ async function handleCallerSpeech(transcript) {
 }
 
 // ---------------------------------------------------------------------
-// Speech synthesis with Chrome bug workaround
+// Speech synthesis with Chrome bug workaround + MOBILE FIX
 // ---------------------------------------------------------------------
 
 function speak(text, onDone) {
@@ -289,6 +318,12 @@ function speak(text, onDone) {
     finish();
   };
 
+  // MOBILE FIX: Re-unlock speechSynthesis before speaking
+  // This ensures the speech session stays active
+  if (!speechUnlocked) {
+    unlockSpeech();
+  }
+
   // Chrome bug workaround: nudge synthesis engine every 4s
   clearInterval(synthWatchdog);
   synthWatchdog = setInterval(() => {
@@ -316,6 +351,7 @@ function finishSession() {
   processing = false;
   isSpeaking = false;
   lastProcessedText = "";
+  speechUnlocked = false;
   clearTimeout(restartTimer);
   clearInterval(synthWatchdog);
   if (recognition) {
