@@ -300,7 +300,6 @@ function speak(text, onDone) {
     window.speechSynthesis.resume();
   }, 4000);
 
-  window.speechSynthesis.resume();
   window.speechSynthesis.speak(utterance);
 
   // Safety timeout: if speech takes way too long, force finish
